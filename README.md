@@ -1,6 +1,9 @@
 # libcdoc
 
-A encryption/decryption library for CDoc container format.
+This repository is a fork of the original open-eid/libcdoc, modified specifically to interoperate with the
+`npuee/npu-cdoc-encrypt` client/tooling: https://github.com/npuee/npu-cdoc-encrypt
+
+A encryption library for CDoc container format.
 
 ## Features
 
@@ -13,6 +16,19 @@ A encryption/decryption library for CDoc container format.
 - CDoc2 symmetric encryption (password-based)
 
 For more information refer [doc/intro.md](doc/intro.md) document.
+
+**This fork — notable changes**
+
+- This fork is simplified to an encrypt-first workflow to work cleanly with the `npu-cdoc-encrypt` tooling.
+- The CLI accepts input via `--in <file>` or as a positional input file.
+- Recipient format is restricted to certificate files using the syntax: `label:cert:PATH` (PATH is an absolute or relative path to a DER/PEM certificate file).
+- Default behavior: produce CDOC1 (`-v1`) and automatically generate the lock label (`--genlabel`) unless explicitly overridden.
+- The tool is silent by default; pass `--verbose` to enable console output for diagnostics.
+- The top-level subcommand defaults to `encrypt` when omitted, i.e. calling the binary without a subcommand runs encryption.
+
+These changes were introduced to make the command-line behavior predictable for use with `npuee/npu-cdoc-encrypt`.
+
+See the "Usage example" below for a basic interoperability example.
 
 ## Building
 [![Build Status](https://github.com/open-eid/libcdoc/workflows/CI/badge.svg?branch=master)](https://github.com/open-eid/libcdoc/actions)
@@ -34,20 +50,37 @@ For more information refer [doc/intro.md](doc/intro.md) document.
 
 2. Fetch the source
 
-        git clone https://github.com/open-eid/libcdoc.git
-        cd libcdoc
+		git clone https://github.com/open-eid/libcdoc.git
+		cd libcdoc
 
 3. Configure
 
-        cmake -B build -S .
+		cmake -B build -S .
 
 4. Build
 
-        cmake --build build
+		cmake --build build
 
 5. Install
 
-        sudo cmake --build build --target install
+		sudo cmake --build build --target install
+
+	Usage example (Windows PowerShell)
+
+	    # build with vcpkg support
+	    .\build.ps1 -UseVcpkg
+
+	    # encrypt a file (defaults: CDOC1, generated label)
+	    .\build\Debug\cdoc-tool.exe encrypt --in C:\path\to\file.txt --rcpt label:cert:C:\path\to\recipient.der --out C:\path\to\out.cdoc
+
+	    # enable verbose output
+	    .\build\Debug\cdoc-tool.exe --verbose encrypt --in C:\path\to\file.txt --rcpt label:cert:C:\path\to\recipient.der --out C:\path\to\out.cdoc
+
+	Notes
+
+	- The `--rcpt` option only accepts `label:cert:PATH` recipient entries in this fork. The PATH must point to the recipient certificate file (DER or PEM).
+	- The produced `.cdoc` files are intended to be consumed by tools compatible with the CDOC1 format, including `npuee/npu-cdoc-encrypt` workflows.
+	- If you need the original multi-mode behavior (decrypt/re-encrypt/locks), refer to the upstream repository: https://github.com/open-eid/libcdoc
 
 ### macOS
 

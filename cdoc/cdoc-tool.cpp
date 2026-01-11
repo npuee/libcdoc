@@ -17,10 +17,7 @@
  */
 
 #include <iostream>
-#ifndef _WIN32
-#include <termios.h>
-#include <unistd.h>
-#endif
+// No platform-specific terminal includes needed for encrypt-only tool
 
 #include "CDocCipher.h"
 #include "ConsoleLogger.h"
@@ -41,44 +38,8 @@ enum {
 static void print_usage(ostream& ofs)
 {
     ofs << "cdoc-tool version: " << VERSION_STR << endl;
-    ofs << "cdoc-tool encrypt --rcpt RECIPIENT [--rcpt...] [-v1] [--genlabel] --out OUTPUTFILE FILE [FILE...]" << endl;
+    ofs << "cdoc-tool encrypt --rcpt RECIPIENT.cer [--rcpt...]  --out OUTPUTFILE --IN FILE" << endl;
     ofs << "  Encrypt files for one or more recipients" << endl;
-    ofs << "  RECIPIENT has to be one of the following:" << endl;
-    ofs << "    [label]:cert:CERTIFICATE_HEX - public key from certificate" << endl;
-    ofs << "    [label]:pkey:SECRET_KEY_HEX - public key" << endl;
-    ofs << "    [label]:pfkey:PUB_KEY_FILE - path to DER file with EC (secp384r1 curve) public key" << endl;
-    ofs << "    [label]:skey:SECRET_KEY_HEX - AES key" << endl;
-    ofs << "    [label]:pw:PASSWORD - Derive key using PWBKDF" << endl;
-    ofs << "    [label]:p11sk:SLOT:[PIN]:[PKCS11 ID]:[PKCS11 LABEL] - use AES key from PKCS11 module" << endl;
-    ofs << "    [label]:p11pk:SLOT:[PIN]:[PKCS11 ID]:[PKCS11 LABEL] - use public key from PKCS11 module" << endl;
-    ofs << "    [label]:share:ID - use keyshares with given ID (personal code)" << endl;
-    ofs << "  -v1 - creates CDOC1 version container. Supported only for encryption with certificate." << endl;
-    ofs << "  --genlabel - If specified, the lock label is generated." << endl;
-    ofs << endl;
-    ofs << "cdoc-tool decrypt ARGUMENTS FILE [OUTPU_DIR]" << endl;
-    ofs << "  Decrypt container using lock specified by label" << endl;
-    ofs << "  Supported arguments" << endl;
-    ofs << "    --label LABEL - CDOC container's lock label" << endl;
-    ofs << "    --label_idx INDEX - CDOC container's lock 1-based label index" << endl;
-    ofs << "    --slot SLOT - PKCS11 slot number" << endl;
-    ofs << "    --password PASSWORD - lock's password" << endl;
-    ofs << "    --secret SECRET - secret phrase (AES key)" << endl;
-    ofs << "    --pin PIN - PKCS11 pin" << endl;
-    ofs << "    --key-id - PKCS11 key ID" << endl;
-    ofs << "    --key-label - PKCS11 key label" << endl;
-    ofs << endl;
-    ofs << "cdoc-tool locks FILE" << endl;
-    ofs << endl;
-    ofs << "cdoc-tool re-encrypt DECRYPT_ARGUMENTS ENCRYPT_ARGUMENTS FILE --out OUTPUTFILE" << endl;
-    ofs << "  Re-encrypts container for different recipient(s)" << endl;
-    ofs << endl;
-    ofs << "Common arguments:" << endl;
-    ofs << "  --library - path to the PKCS11 library to be used" << endl;
-    ofs << "  --server ID URL(S) - specifies a key or share server. The recipient key will be stored in server instead of in the document." << endl;
-    ofs << "                       for key server the url is either fetch or send url. For share server it is comma-separated list of share server urls." << endl;
-    ofs << "  --accept FILENAME - specifies an accepted server certificate (in der encoding)" << endl;
-
-    // (Help examples removed for brevity)
 }
 
 static std::vector<uint8_t>
@@ -137,144 +98,33 @@ parse_rcpt(ToolConf& conf, RecipientInfoVector& rcpts, int& arg_idx, int argc, c
     string_view arg(argv[arg_idx]);
     if ((arg != "--rcpt") || ((arg_idx + 1) >= argc)) return 0;
 
-    // Allow passing an absolute file path directly (Windows drive or Unix absolute)
     std::string argval(argv[arg_idx + 1]);
-    if ((argval.size() > 1 && argval[1] == ':') || (!argval.empty() && (argval[0] == '/' || argval[0] == '\\'))) {
-        // Treat the provided value as a certificate file path
-        RcptInfo rcpt;
-        rcpt.label = "";
-        rcpt.type = RcptInfo::CERT;
-        rcpt.cert = readAllBytes(argval);
-        rcpt.key_file_name = filesystem::path(argval).filename().string();
-        if (rcpt.cert.empty()) {
-            // readAllBytes already reported the error
-            return 1;
-        }
-        rcpts.push_back(std::move(rcpt));
-        return 2;
+    // Accept either:
+    //  - full certificate path: "C:\...\recipient.cer" or "/path/recipient.cer"
+    //  - or the older form: "label:cert:PATH"
+    // If the optional ":cert:" marker is present we extract the label before it,
+    // otherwise the whole value is treated as the certificate path.
+    std::string label;
+    std::string path;
+    const std::string cert_marker = ":cert:";
+    size_t pos = argval.find(cert_marker);
+    if (pos != std::string::npos) {
+        label = argval.substr(0, pos);
+        path = argval.substr(pos + cert_marker.size());
+    } else {
+        // Treat entire argument as certificate file path; label will be empty.
+        path = argval;
     }
 
-    vector<string> parts(split(argval));
-    if (parts.size() < 3) return RESULT_USAGE;
+    if (path.empty()) return RESULT_USAGE;
 
     RcptInfo rcpt;
-    rcpt.label = parts[0];
-    string_view method(parts[1]);
-    if (method == "cert") {
-        // label:cert:FILENAME
-        if (parts.size() != 3) return RESULT_USAGE;
+    rcpt.label = label;
+    rcpt.type = RcptInfo::CERT;
+    rcpt.cert = readAllBytes(path);
+    rcpt.key_file_name = filesystem::path(path).filename().string();
+    if (rcpt.cert.empty()) return 1; // readAllBytes already reported error
 
-        rcpt.type = RcptInfo::CERT;
-        rcpt.cert = readAllBytes(parts[2]);
-        rcpt.key_file_name = filesystem::path(parts[2]).filename().string();
-    } else if (method == "pkey") {
-        // label:pkey:PUBLIC_KEY
-        if (parts.size() != 3) return RESULT_USAGE;
-
-        rcpt.type = RcptInfo::PKEY;
-        rcpt.secret = fromHex(parts[2]);
-    } else if (method == "pfkey") {
-        // label:pfkey:PUBLIC_KEY_FILE
-        if (parts.size() != 3) return RESULT_USAGE;
-
-        rcpt.type = RcptInfo::PKEY;
-        rcpt.secret = readAllBytes(parts[2]);
-        if (rcpt.secret.empty()) {
-            // Occurs when the file does not exist. readAllBytes already output the error message.
-            return 1;
-        }
-
-        filesystem::path key_file(parts[2]);
-        rcpt.key_file_name = key_file.filename().string();
-    } else if (method == "key" || method == "skey") {
-        // label:skey:SECRET_KEY_HEX
-        // For backward compatibility leave also "key" as the synonym for "skey" method.
-        if (parts.size() != 3) return RESULT_USAGE;
-
-        rcpt.type = RcptInfo::SKEY;
-        rcpt.secret = fromHex(parts[2]);
-        if (rcpt.secret.size() != 32) {
-            LOG_ERROR("Symmetric key has to be exactly 32 bytes long");
-            return RESULT_ERROR;
-        }
-    } else if (method == "pw") {
-        // label:pw:PASSWORD
-        if (parts.size() != 3) return RESULT_USAGE;
-
-        rcpt.type = RcptInfo::PASSWORD;
-        rcpt.secret.assign(parts[2].cbegin(), parts[2].cend());
-    } else if (method == "p11sk" || method == "p11pk") {
-        // label:p11sk:slot[:pin:key_id:key_label]
-        rcpt.type = (method == "p11sk") ? RcptInfo::P11_SYMMETRIC : RcptInfo::P11_PKI;
-
-        conf.libraryRequired = true;
-
-        size_t last_char_idx;
-        if (parts[2].starts_with("0x")) {
-            rcpt.slot = std::stoul(parts[2].substr(2), &last_char_idx, 16);
-            last_char_idx += 2;
-        } else {
-            rcpt.slot = std::stoul(parts[2], &last_char_idx);
-        }
-        if (last_char_idx < parts[2].size()) {
-            LOG_ERROR("Slot is not a number");
-            return RESULT_USAGE;
-        }
-
-        if (parts.size() > 3) {
-            rcpt.secret.assign(parts[3].cbegin(), parts[3].cend());
-            if (parts.size() > 4) {
-                if (!parts[4].empty()) rcpt.key_id = fromHex(parts[4]);
-                if (parts.size() > 5)
-                    rcpt.key_label = parts[5];
-            }
-        }
-
-#ifndef NDEBUG
-        // For debugging
-        LOG_DBG("Method: {}", method);
-        LOG_DBG("Slot: {}", rcpt.slot);
-        if (!rcpt.secret.empty()) {
-            string str(rcpt.secret.cbegin(), rcpt.secret.cend());
-            LOG_TRACE("Pin: {}", str);
-        }
-        if (!rcpt.key_id.empty())
-            LOG_DBG("Key ID: {}", toHex(rcpt.key_id));
-        if (!rcpt.key_label.empty())
-            LOG_DBG("Key label: {}", rcpt.key_label);
-#endif
-    } else if (method == "ncrypt") {
-        // label:ncrypt:key_label[:pin]
-        rcpt.type = RcptInfo::NCRYPT;
-
-        if (parts.size() > 2) {
-            rcpt.key_label = parts[2];
-            if (parts.size() > 3) {
-                rcpt.secret.assign(parts[3].cbegin(), parts[3].cend());
-            }
-        }
-
-#ifndef NDEBUG
-        // For debugging
-        cout << "Method: " << method << endl;
-        cout << "Slot: " << rcpt.slot << endl;
-        if (!rcpt.secret.empty())
-            cout << "Pin: " << string(rcpt.secret.cbegin(), rcpt.secret.cend()) << endl;
-        if (!rcpt.key_id.empty())
-            cout << "Key ID: " << toHex(rcpt.key_id) << endl;
-        if (!rcpt.key_label.empty())
-            cout << "Key label: " << rcpt.key_label << endl;
-#endif
-    } else if (method == "share") {
-        // label:share:RECIPIENT_ID
-        if (parts.size() != 3) return RESULT_USAGE;
-
-        rcpt.type = RcptInfo::SHARE;
-        rcpt.id = parts[2];
-    } else {
-        LOG_ERROR("Unknown method: {}", method);
-        return RESULT_USAGE;
-    }
     rcpts.push_back(std::move(rcpt));
     return 2;
 }
@@ -399,101 +249,7 @@ struct LockData {
     }
 };
 
-static int
-parse_key_data(LockData& ldata, const int& arg_idx, int argc, char *argv[])
-{
-    string_view arg(argv[arg_idx]);
-    if ((arg == "--label" || arg == "--label_idx") && (arg_idx + 1) < argc) {
-        // Make sure the label or label index is provided only once.
-        if (!ldata.lock_label.empty() || ldata.lock_idx != -1) {
-            LOG_ERROR("The label or label's index was already provided");
-            return RESULT_USAGE;
-        }
-        if (arg == "--label_idx") {
-            size_t last_char_idx;
-            string str(argv[arg_idx + 1]);
-            ldata.lock_idx = std::stol(str, &last_char_idx);
-            if (last_char_idx < str.size()) {
-                LOG_ERROR("Label index is not a number");
-                return RESULT_USAGE;
-            }
-        } else {
-            ldata.lock_label = argv[arg_idx + 1];
-        }
-        return 2;
-    } else if (arg == "--password" || arg == "--pin") {
-        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-
-        string_view s(argv[arg_idx + 1]);
-        ldata.secret.assign(s.cbegin(), s.cend());
-        return 2;
-    } else if (arg == "--secret") {
-        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-        ldata.secret = fromHex(argv[arg_idx + 1]);
-        return 2;
-    } else if (arg == "--pkey") {
-        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-        ldata.secret = fromHex(argv[arg_idx + 1]);
-        return 2;
-    } else if (arg == "--pfkey") {
-        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-        ldata.secret = readAllBytes(argv[arg_idx + 1]);
-        return 2;
-    } else if (arg == "--slot") {
-        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-
-        string str(argv[arg_idx + 1]);
-        size_t last_char_idx;
-        if (str.starts_with("0x")) {
-            ldata.slot = std::stol(str.substr(2), &last_char_idx, 16);
-            last_char_idx += 2;
-        } else {
-            ldata.slot = std::stol(str, &last_char_idx);
-        }
-        if (last_char_idx < str.size()) {
-            LOG_ERROR("Slot is not a number");
-            return 2;
-        }
-        return 2;
-    } else if (arg == "--key-id") {
-        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-        string_view s(argv[arg_idx + 1]);
-        ldata.key_id.assign(s.cbegin(), s.cend());
-        return 2;
-    } else if (arg == "--key-label") {
-        if ((arg_idx + 1) >= argc) return RESULT_USAGE;
-        ldata.key_label = argv[arg_idx + 1];
-        return 2;
-    }
-    return 0;
-}
-
-static std::string
-inputSecret(std::string_view text)
-{
-    cout << text;
-#ifdef _WIN32
-    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-    DWORD mode = 0;
-    GetConsoleMode(hStdin, &mode);
-    SetConsoleMode(hStdin, mode & ~ENABLE_ECHO_INPUT);
-#else
-    termios o {};
-    tcgetattr(STDIN_FILENO, &o);
-    termios n = o;
-    n.c_lflag &= ~ECHO;
-    tcsetattr(STDIN_FILENO, TCSANOW, &n);
-#endif
-    string result;
-    getline(std::cin, result);
-#ifdef _WIN32
-    SetConsoleMode(hStdin, mode);
-#else
-    tcsetattr(STDIN_FILENO, TCSANOW, &o);
-    cout << endl;
-#endif
-    return result;
-}
+// Decrypt-related interactive helpers removed for encrypt-only tool
 
 //
 // cdoc-tool decrypt ARGUMENTS FILE [OUTPU_DIR]
@@ -504,170 +260,7 @@ inputSecret(std::string_view text)
 //   --key-label     PKCS11 key label
 //   --library       full path to cryptographic library to be used (needed for decryption with PKCS11)
 
-static int ParseAndDecrypt(int argc, char *argv[])
-{
-    ToolConf conf;
-
-    LockData ldata;
-
-    int arg_idx = 0;
-    while (arg_idx < argc) {
-        int result = parse_common(conf, arg_idx, argc, argv);
-        if (result < 0) return result;
-        arg_idx += result;
-        if (result > 0) continue;
-        result = parse_key_data(ldata, arg_idx, argc, argv);
-        if (result < 0) return result;
-        arg_idx += result;
-        if (result > 0) continue;
-
-        if (argv[arg_idx][0] != '-') {
-            if (conf.input_files.empty()) {
-                conf.input_files.push_back(argv[arg_idx]);
-            } else {
-                conf.out = argv[arg_idx];
-            }
-            arg_idx += 1;
-        } else {
-            return RESULT_USAGE;
-        }
-    }
-
-    // Validating the input parameters
-    int result = ldata.validate(conf);
-    if (result != RESULT_OK) return result;
-
-    if (conf.input_files.empty()) {
-        LOG_ERROR("No file to decrypt");
-        return RESULT_USAGE;
-    }
-
-    // If output directory was not specified, use current directory
-    if (conf.out.empty()) {
-        conf.out = ".";
-    }
-
-    // Ask secret if not provided
-    if (ldata.secret[0] == '?') {
-        std::string secret = inputSecret("Enter password: ");
-        ldata.secret.assign(secret.cbegin(), secret.cend());
-    }
-
-    CDocCipher cipher;
-    RcptInfo rcpt {RcptInfo::ANY, {}, ldata.secret, ldata.slot, ldata.key_id, ldata.key_label};
-    if (ldata.lock_idx != -1) {
-        return cipher.Decrypt(conf, ldata.lock_idx, rcpt);
-    } else {
-        return cipher.Decrypt(conf, ldata.lock_label, rcpt);
-    }
-}
-
-static int ParseAndReEncrypt(int argc, char *argv[])
-{
-    ToolConf conf;
-    // Accept -v1 and --genlabel by default so the user does not have to type them
-    conf.cdocVersion = 1;
-    conf.gen_label = true;
-    RecipientInfoVector rcpts;
-    LockData ldata;
-
-    int arg_idx = 0;
-    while (arg_idx < argc) {
-        int result = parse_common(conf, arg_idx, argc, argv);
-        if (result < 0) return result;
-        arg_idx += result;
-        if (result > 0) continue;
-        result = parse_key_data(ldata, arg_idx, argc, argv);
-        if (result < 0) return result;
-        arg_idx += result;
-        if (result > 0) continue;
-        result = parse_rcpt(conf, rcpts, arg_idx, argc, argv);
-        if (result < 0) return result;
-        arg_idx += result;
-        if (result > 0) continue;
-
-        string_view arg(argv[arg_idx]);
-        if (arg == "--out" && ((arg_idx + 1) < argc)) {
-            conf.out = argv[arg_idx + 1];
-            arg_idx += 1;
-        } else if ((arg == "--in") && ((arg_idx + 1) < argc)) {
-            conf.input_files.push_back(argv[arg_idx + 1]);
-            arg_idx += 1;
-        } else if (arg == "-v1") {
-            conf.cdocVersion = 1;
-        } else if (arg == "--genlabel") {
-            conf.gen_label = true;
-        } else if (argv[arg_idx][0] != '-') {
-            conf.input_files.push_back(argv[arg_idx]);
-        } else {
-            LOG_ERROR("Unknown argument: {}", arg);
-            return RESULT_USAGE;
-        }
-        arg_idx += 1;
-    }
-
-    // Validating the input parameters
-    int result = ldata.validate(conf);
-    if (result != RESULT_OK) return result;
-
-    if (rcpts.empty()) {
-        LOG_ERROR("No recipients");
-        return RESULT_USAGE;
-    }
-
-    if (!conf.gen_label) {
-        // If labels must not be generated then is there any Recipient without provided label?
-        auto rcpt_wo_label{ find_if(rcpts.cbegin(), rcpts.cend(), [](RecipientInfoVector::const_reference rcpt) -> bool {return rcpt.label.empty();}) };
-        if (rcpt_wo_label != rcpts.cend()) {
-            if (rcpts.size() > 1) {
-                LOG_ERROR("Not all Recipients have label");
-            } else {
-                LOG_ERROR("Label not provided");
-            }
-            return RESULT_USAGE;
-        }
-    }
-
-    if (conf.out.empty()) {
-        LOG_ERROR("No output specified");
-        return RESULT_USAGE;
-    }
-
-    if (conf.libraryRequired && conf.library.empty()) {
-        LOG_ERROR("Cryptographic library is required");
-        return RESULT_USAGE;
-    }
-
-    // CDOC1 is supported only for encryption with certificate.
-    if (conf.cdocVersion == 1) {
-        auto rcpt_type_non_cert{ find_if(rcpts.cbegin(), rcpts.cend(), [](RecipientInfoVector::const_reference rcpt) -> bool {return rcpt.type != RcptInfo::CERT;}) };
-        if (rcpt_type_non_cert != rcpts.cend()) {
-            LOG_ERROR("CDOC version 1 container can be used for encryption with certificate only.");
-            return 1;
-        }
-    }
-
-    CDocCipher cipher;
-    RcptInfo rcpt {RcptInfo::ANY, {}, ldata.secret, ldata.slot, ldata.key_id, ldata.key_label};
-    if (ldata.lock_idx != -1) {
-        return cipher.ReEncrypt(conf, ldata.lock_idx, ldata.lock_label, rcpt, rcpts);
-    }
-    return true;
-}
-
-//
-// cdoc-tool locks FILE
-//
-
-static int ParseAndGetLocks(int argc, char *argv[])
-{
-    if (argc < 1)
-        return 2;
-
-    CDocCipher cipher;
-    cipher.Locks(argv[0]);
-    return 0;
-}
+// Decrypt/re-encrypt/locks functions removed for encrypt-only tool
 
 int main(int argc, char *argv[])
 {
@@ -712,11 +305,12 @@ int main(int argc, char *argv[])
     string_view command;
     char **cmd_argv = nullptr;
     int cmd_argc = 0;
-    if ((first == "encrypt") || (first == "decrypt") || (first == "re-encrypt") || (first == "locks")) {
+    if (first == "encrypt") {
         command = first;
         cmd_argv = argv_f + 2;
         cmd_argc = argc2 - 2;
     } else {
+        // No other subcommands supported; treat as encrypt invocation
         command = "encrypt";
         cmd_argv = argv_f + 1;
         cmd_argc = argc2 - 1;
@@ -728,12 +322,6 @@ int main(int argc, char *argv[])
     int retVal = 2;     // Output the help by default.
     if (command == "encrypt") {
         retVal = ParseAndEncrypt(cmd_argc, cmd_argv);
-    } else if (command == "decrypt") {
-        retVal = ParseAndDecrypt(cmd_argc, cmd_argv);
-    } else if (command == "re-encrypt") {
-        retVal = ParseAndReEncrypt(cmd_argc, cmd_argv);
-    } else if (command == "locks") {
-        retVal = ParseAndGetLocks(cmd_argc, cmd_argv);
     } else {
         cerr << "Invalid command: " << command << endl;
     }
