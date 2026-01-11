@@ -145,7 +145,24 @@ parse_rcpt(ToolConf& conf, RecipientInfoVector& rcpts, int& arg_idx, int argc, c
     string_view arg(argv[arg_idx]);
     if ((arg != "--rcpt") || ((arg_idx + 1) >= argc)) return 0;
 
-    vector<string> parts(split(argv[arg_idx + 1]));
+    // Allow passing an absolute file path directly (Windows drive or Unix absolute)
+    std::string argval(argv[arg_idx + 1]);
+    if ((argval.size() > 1 && argval[1] == ':') || (!argval.empty() && (argval[0] == '/' || argval[0] == '\\'))) {
+        // Treat the provided value as a certificate file path
+        RcptInfo rcpt;
+        rcpt.label = "";
+        rcpt.type = RcptInfo::CERT;
+        rcpt.cert = readAllBytes(argval);
+        rcpt.key_file_name = filesystem::path(argval).filename().string();
+        if (rcpt.cert.empty()) {
+            // readAllBytes already reported the error
+            return 1;
+        }
+        rcpts.push_back(std::move(rcpt));
+        return 2;
+    }
+
+    vector<string> parts(split(argval));
     if (parts.size() < 3) return RESULT_USAGE;
 
     RcptInfo rcpt;
@@ -307,6 +324,9 @@ static int ParseAndEncrypt(int argc, char *argv[])
         string_view arg(argv[arg_idx]);
         if (arg == "--out" && ((arg_idx + 1) < argc)) {
             conf.out = argv[arg_idx + 1];
+            arg_idx += 1;
+        } else if ((arg == "--in") && ((arg_idx + 1) < argc)) {
+            conf.input_files.push_back(argv[arg_idx + 1]);
             arg_idx += 1;
         } else if (arg == "-v1") {
             conf.cdocVersion = 1;
@@ -578,6 +598,9 @@ static int ParseAndReEncrypt(int argc, char *argv[])
         if (arg == "--out" && ((arg_idx + 1) < argc)) {
             conf.out = argv[arg_idx + 1];
             arg_idx += 1;
+        } else if ((arg == "--in") && ((arg_idx + 1) < argc)) {
+            conf.input_files.push_back(argv[arg_idx + 1]);
+            arg_idx += 1;
         } else if (arg == "-v1") {
             conf.cdocVersion = 1;
         } else if (arg == "--genlabel") {
@@ -666,19 +689,33 @@ int main(int argc, char *argv[])
     console_logger.SetMinLogLevel(ILogger::LEVEL_TRACE);
     int cookie = ILogger::addLogger(&console_logger);
 
-    string_view command(argv[1]);
+    // If first argument is not a known command, treat the invocation as 'encrypt' by default
+    string_view first(argv[1]);
+    string_view command;
+    char **cmd_argv = nullptr;
+    int cmd_argc = 0;
+    if ((first == "encrypt") || (first == "decrypt") || (first == "re-encrypt") || (first == "locks")) {
+        command = first;
+        cmd_argv = argv + 2;
+        cmd_argc = argc - 2;
+    } else {
+        command = "encrypt";
+        cmd_argv = argv + 1;
+        cmd_argc = argc - 1;
+    }
+
     LOG_INFO("Command: {}", command);
 
     CDocCipher cipher;
     int retVal = 2;     // Output the help by default.
     if (command == "encrypt") {
-        retVal = ParseAndEncrypt(argc - 2, argv + 2);
+        retVal = ParseAndEncrypt(cmd_argc, cmd_argv);
     } else if (command == "decrypt") {
-        retVal = ParseAndDecrypt(argc - 2, argv + 2);
+        retVal = ParseAndDecrypt(cmd_argc, cmd_argv);
     } else if (command == "re-encrypt") {
-        retVal = ParseAndReEncrypt(argc - 2, argv + 2);
+        retVal = ParseAndReEncrypt(cmd_argc, cmd_argv);
     } else if (command == "locks") {
-        retVal = ParseAndGetLocks(argc - 2, argv + 2);
+        retVal = ParseAndGetLocks(cmd_argc, cmd_argv);
     } else {
         cerr << "Invalid command: " << command << endl;
     }

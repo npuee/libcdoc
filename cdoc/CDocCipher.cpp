@@ -362,7 +362,7 @@ int CDocCipher::Encrypt(ToolConf& conf, RecipientInfoVector& recipients)
         libcdoc::FileListSource src({}, conf.input_files);
         result = writer->encrypt(src, rcpts);
     }
-    if (result < 0) {
+    if (result != libcdoc::OK) {
         LOG_ERROR("Encryption failed: error {}", result);
         cerr << writer->getLastErrorStr() << endl;
     } else {
