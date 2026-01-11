@@ -78,15 +78,7 @@ static void print_usage(ostream& ofs)
     ofs << "                       for key server the url is either fetch or send url. For share server it is comma-separated list of share server urls." << endl;
     ofs << "  --accept FILENAME - specifies an accepted server certificate (in der encoding)" << endl;
 
-    //<< "cdoc-tool encrypt -r X509DerRecipientCert [-r X509DerRecipientCert [...]] InFile [InFile [...]] OutFile" << std::endl
-    //	<< "cdoc-tool encrypt --rcpt RECIPIENT [--rcpt RECIPIENT] [--file INFILE] [...] --out OUTFILE" << std::endl
-    //	<< "  where RECIPIENT is in form label:TYPE:value" << std::endl
-    //	<< "    where TYPE is 'cert', 'key' or 'pw'" << std::endl
-#ifdef _WIN32
-    //	<< "cdoc-tool decrypt win [ui|noui] pin InFile OutFolder" << endl
-#endif
-    //	<< "cdoc-tool decrypt pkcs11 path/to/so pin InFile OutFolder" << std::endl
-    //	<< "cdoc-tool decrypt pkcs12 path/to/pkcs12 pin InFile OutFolder" << std::endl;
+    // (Help examples removed for brevity)
 }
 
 static std::vector<uint8_t>
