@@ -285,6 +285,9 @@ static int ParseAndEncrypt(int argc, char *argv[])
     LOG_INFO("Encrypting");
 
     ToolConf conf;
+    // Accept -v1 and --genlabel by default so the user does not have to type them
+    conf.cdocVersion = 1;
+    conf.gen_label = true;
     RecipientInfoVector rcpts;
 
     //
@@ -550,6 +553,9 @@ static int ParseAndDecrypt(int argc, char *argv[])
 static int ParseAndReEncrypt(int argc, char *argv[])
 {
     ToolConf conf;
+    // Accept -v1 and --genlabel by default so the user does not have to type them
+    conf.cdocVersion = 1;
+    conf.gen_label = true;
     RecipientInfoVector rcpts;
     LockData ldata;
 
