@@ -11,7 +11,7 @@ param(
   [string]$vcpkg_installed_platform = "$vcpkg_installed\vcpkg_installed",
   [string]$cmake = "cmake.exe",
   [string]$generator = "Visual Studio 17 2022",
-  [switch]$RunTests = $false,
+  [switch]$RunTests = $false
 )
 
 if(!(Test-Path -Path $vcpkg)) {

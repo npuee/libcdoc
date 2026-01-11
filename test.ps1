@@ -1,0 +1,1 @@
+C:\apps\repo\libcdoc\build\cdoc\RelWithDebInfo\cdoc\RelWithDebInfo\cdoc-tool.exe  --in C:\apps\libcdoc\text.txt --rcpt C:\apps\libcdoc\38205135885.cer  --out  C:\apps\libcdoc\text.cdoc 
