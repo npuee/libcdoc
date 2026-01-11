@@ -684,24 +684,50 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Add console logger by default
+    // Check whether `--verbose` was provided; if not, silence stdout/stderr
+    bool verbose = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--verbose") { verbose = true; break; }
+    }
+
+    struct NullBuf : public std::streambuf { int overflow(int c) override { return c; } };
+    static NullBuf nullbuf;
+    static std::streambuf* orig_cout = nullptr;
+    static std::streambuf* orig_cerr = nullptr;
+    if (!verbose) {
+        orig_cout = std::cout.rdbuf(&nullbuf);
+        orig_cerr = std::cerr.rdbuf(&nullbuf);
+    }
+
+    // Add console logger (its output will be silenced unless --verbose)
     ConsoleLogger console_logger;
     console_logger.SetMinLogLevel(ILogger::LEVEL_TRACE);
     int cookie = ILogger::addLogger(&console_logger);
 
+    // Build a filtered argv array without any --verbose entries for parsing
+    std::vector<char*> argv2;
+    argv2.reserve(argc);
+    argv2.push_back(argv[0]);
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view(argv[i]) == "--verbose") continue;
+        argv2.push_back(argv[i]);
+    }
+    int argc2 = (int)argv2.size();
+    char** argv_f = argv2.data();
+
     // If first argument is not a known command, treat the invocation as 'encrypt' by default
-    string_view first(argv[1]);
+    string_view first = (argc2 > 1) ? string_view(argv_f[1]) : string_view("");
     string_view command;
     char **cmd_argv = nullptr;
     int cmd_argc = 0;
     if ((first == "encrypt") || (first == "decrypt") || (first == "re-encrypt") || (first == "locks")) {
         command = first;
-        cmd_argv = argv + 2;
-        cmd_argc = argc - 2;
+        cmd_argv = argv_f + 2;
+        cmd_argc = argc2 - 2;
     } else {
         command = "encrypt";
-        cmd_argv = argv + 1;
-        cmd_argc = argc - 1;
+        cmd_argv = argv_f + 1;
+        cmd_argc = argc2 - 1;
     }
 
     LOG_INFO("Command: {}", command);
